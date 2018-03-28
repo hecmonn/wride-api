@@ -1,11 +1,33 @@
 import mysql from 'mysql';
 import express from 'express';
-import {dbCred,tokenSecret} from '../config';
+import {dbCred,tokenSecret,dest} from '../config';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import {prettyName,initials} from './helpers.js';
+import {prettyName,initials,_make_user_sound} from './helpers.js';
+import metaphone from 'metaphone';
+import multer from 'multer';
+import fs from 'fs';
+import path from 'path';
 
 const router=express.Router();
+const storage=multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null,dest);
+    },
+    filename: function (req, file, cb) {
+        cb(null,file.originalname);
+    }
+});
+const upload = multer({storage});
+const type = upload.single('photo');
+/*const storage = multer.diskStorage({
+    //destination: function (req, file, cb) {
+    //    cb(null, '/tmp/my-uploads')
+    //},
+    filename: function (req, file, cb) {
+        cb(file.fieldname + '.jpeg')
+    }
+});*/
 const con = mysql.createConnection({...dbCred});
 
 const query=(sql,res)=>{
@@ -20,8 +42,9 @@ router.post('/save-user',(req,res)=>{
     const {fname,lname,email,username,password,confirm_password}=req.body.data;
     //TODO: MISSING BACKEND VALIDATIONS
     //TODO: redirect user logged in to home
+    let phonetic=_make_user_sound({name:`${fname} ${lname}`,username});
     const password_digest=bcrypt.hashSync(password, 10);
-    let sql=`INSERT INTO users(username,fname,lname,email,password) values('${username}','${fname}','${lname}','${email}','${password_digest}')`
+    let sql=`INSERT INTO users(username,fname,lname,email,password,phonetic) values('${username}','${fname}','${lname}','${email}','${password_digest}','${phonetic}')`
     let query_res=con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         const payload=req.body.data;
@@ -41,7 +64,10 @@ router.post('/login',(req,res)=>{
                     username: response[0].username,
                     email: response[0].email,
                     initials: initials(response[0].fname,response[0].lname),
-                    name: prettyName(response[0].fname,response[0].lname)
+                    name: prettyName(response[0].fname,response[0].lname),
+                    avatar: response[0].path,
+                    bio: response[0].bio,
+                    private: response[0].private
                 }, tokenSecret.jwtSecret);
                 res.json({token,isLogged:true});
             } else {
@@ -55,7 +81,8 @@ router.post('/login',(req,res)=>{
 });
 router.post('/save-post',(req,res)=>{
     const {username,title,content}=req.body.data;
-    let sql=`INSERT INTO wrides(username,title,content) VALUES('${username}','${title}','${content}')`;
+    let phonetic=metaphone(title);
+    let sql=`INSERT INTO wrides(username,title,content,phonetic) VALUES('${username}','${title}','${content}','${phonetic}')`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({submitted:true,...req.body.data})
@@ -64,9 +91,7 @@ router.post('/save-post',(req,res)=>{
 
 router.post('/get-own-posts',(req,res)=>{
     const username=req.body.data;
-    //let sql=`select a.*,b.fname,b.lname,case when c.action=1 then 1 else 0 end as is_liked, case when c.action=2 then 1 else 0 end as is_shared from wrides a left join actions c on a.id=c.wid and a.username=c.username left join users b on a.username=b.username where a.username='${username}' order by a.created_date desc`;
-    let sql=`select a.*,b.fname,b.lname,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username where a.username='${username}' group by id,content,title,a.created_date,a.username,fname,lname order by a.created_date desc;`;
-
+    let sql=`select a.*,b.fname,b.lname,b.path,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared,sum(case when c.action=3 and c.username='${username}' then 1 else 0 end) as is_saved,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username where a.username='${username}' group by id,content,title,a.created_date,a.username,fname,lname,path order by a.created_date desc;`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({fetched:true,wrides:response});
@@ -74,17 +99,29 @@ router.post('/get-own-posts',(req,res)=>{
 });
 
 router.post('/get-home-posts',(req,res)=>{
-    const username=req.body.data;
-    let sql=`select a.*,b.fname,b.lname,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username where a.username in (select username from followers where follower_username='${username}') or a.username='${username}' group by id,content,title,a.created_date,a.username,fname,lname order by a.created_date desc;`;
+    const {username,offset}=req.body.data;
+    let limit=5;
+    let sql=`select a.*,b.fname,b.lname,b.path,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared,sum(case when c.action=3 and c.username='${username}' then 1 else 0 end) as is_saved,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username where  a.username in (select username from followers where follower_username='${username}') or a.username='${username}' group by id,content,title,a.created_date,a.username,fname,lname,path order by a.created_date desc limit ${limit} offset ${offset};`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({ok:true,wrides:response});
     });
 });
 
+router.post('/get-home-posts-count',(req,res)=>{
+    const username=req.body.data;
+    let sql=`select count(a.id) as posts_cnt from wrides a where a.username in (select username from followers where follower_username='${username}') or a.username='${username}';`;
+    con.query(sql,(err,response,fields)=>{
+        if(err) throw err;
+        res.json({wrides_cnt:response[0].posts_cnt});
+    });
+});
+
+
+
 router.post('/get-profile',(req,res)=>{
     const username=req.body.data;
-    let sql=`select a.username,fname,lname,bio,count(distinct b.id) as post_cnt, count(distinct d.follower_username) as followers_cnt, count(distinct c.id) as likes_cnt from users a left join wrides b on a.username=b.username left join actions c on a.username=c.username and c.action=1 left join followers d on a.username=d.username where a.username='${username}'`;
+    let sql=`select a.username,path,fname,lname,bio,count(distinct b.id) as post_cnt, count(distinct d.follower_username) as followers_cnt, count(distinct c.id) as likes_cnt from users a left join wrides b on a.username=b.username left join actions c on a.username=c.username and c.action=1 left join followers d on a.username=d.username where a.username='${username}'`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         if(response.length>0){
@@ -95,7 +132,8 @@ router.post('/get-profile',(req,res)=>{
                 bio:response[0].bio,
                 likes: response[0].likes_cnt,
                 followers: response[0].followers_cnt,
-                posts: response[0].post_cnt
+                posts: response[0].post_cnt,
+                path: response[0].path
             }});
         } else {
             res.json({user:'error'})
@@ -125,7 +163,7 @@ router.post('/un-follow',(req,res)=>{
 });
 
 router.post('/post-action',(req,res)=>{
-    const {id,auser,action,liked,shared}=req.body.data;
+    const {id,auser,action,liked,shared,saved}=req.body.data;
     let sql=`insert into actions(wid,username,action) values('${id}','${auser}','${action}')`;
     let wyd=1;
     let wydn;
@@ -135,17 +173,23 @@ router.post('/post-action',(req,res)=>{
     } else if(action==2 && shared){
         sql=`delete from actions where action=2 and username='${auser}' and wid=${id}`;
         wyd=3;
+    } else if(action==3 && saved){
+        sql=`delete from actions where action=3 and username='${auser}' and wid=${id}`;
+        wyd=4;
     }
     if(wyd==1 && action==1){
         wydn='liked';
+    } else if(wyd==1 && action==3){
+        wydn='saved';
     } else if(wyd==1 && action==2){
         wydn='shared';
     } else if(wyd==2){
         wydn='unliked';
     } else if(wyd==3){
         wydn='unshared';
+    } else if(wyd==4){
+        wydn='unsaved';
     }
-
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({wydn});
@@ -181,7 +225,7 @@ router.post('/get-stats',(req,res)=>{
 
 router.post('/get-notifications',(req,res)=>{
     const username=req.body.data;
-    let sql=`select * from (select a.username, case when action=1 then 'has liked' when action=2 then 'has shared' else 'undefined' end as action, title,a.created_date,action as action_no from actions a left join wrides b on a.wid=b.id where b.username='john' union select follower_username as username,'started following you' as action, null as title,created_date,3 as action_no from followers) a order by a.created_date desc`;
+    let sql=`select * from (select a.username, case when action=1 then 'has liked' when action=2 then 'has shared' else 'undefined' end as action, title,a.created_date,action as action_no,path from actions a left join wrides b on a.wid=b.id left join users c on a.username=c.username where b.username='${username}' and a.username<>'${username}' union select follower_username as username,'started following you' as action, null as title,a.created_date,3 as action_no,path from followers a left join users b on a.follower_username=b.username where a.username='${username}' and follower_username<>'${username}') a order by a.created_date desc`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({notifications:response});
@@ -190,7 +234,7 @@ router.post('/get-notifications',(req,res)=>{
 
 router.post('/get-unread-notifications',(req,res)=>{
     const username=req.body.data;
-    let sql=`select a.username, case when action=1 then 'liked' when action=2 then 'shared' else 'undefined' end as action, title from actions a left join wrides b on a.wid=b.id where b.username='john' and seen=0`;
+    let sql=`select a.username, case when action=1 then 'liked' when action=2 then 'shared' else 'undefined' end as action, title from actions a left join wrides b on a.wid=b.id where b.username='${username}' and seen=0`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({notifications:response});
@@ -198,7 +242,8 @@ router.post('/get-unread-notifications',(req,res)=>{
 });
 
 router.post('/clear-notifications',(req,res)=>{
-    let sql=`update actions set seen=1 where wid in (select id from wrides where username='${username}')`;
+    const username=req.body.data;
+    let sql=`update actions set seen=1 where seen=0 and wid in (select id from wrides where username='${username}');`;
     console.log(sql);
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
@@ -206,11 +251,61 @@ router.post('/clear-notifications',(req,res)=>{
     });
 });
 
-router.post('/change-settings',(req,res)=>{
-    let sql=`update users set `;
-    console.log(req.body)
+router.post('/upload-avatar',type,(req,res)=>{
+    //console.log('Req: ',req.file);
+    //console.log('Req body: ',req.body);
+    const {filename}=req.file;
+    const {username}=req.body;
+    //console.log(filename,'---filename from api');
+    let sql=`select path from users where username='${username}'`;
+    con.query(sql,(err,response,fields)=>{
+        let path=response[0].path;
+        let complete_path=dest+'/'+path;
+        //console.log(req.file,'---file from api');
+
+        //TODO: ERASE PREVIOUS AVATARS
+        //if(path!==null){
+        //    fs.unlink(complete_path,err=>{
+        //        if(err) throw err;
+        //        console.log('Deleted file from ',username);
+        //    });
+        //}
+        let sql=`update users set path='${filename}' where username='${username}'`;
+        con.query(sql,(err,response,fields)=>{
+            if (err) throw err;
+            res.json({msg:'Changed profile picture succesfully'});
+        });
+    });
 });
 
+router.post('/get-search',(req,res)=>{
+    let {query,username}=req.body.data;
+    let phonetic=metaphone(query);
+    let sql=`select username,fname,lname from users where phonetic like '%${phonetic}%' or username='${query}'`;
+    con.query(sql,(err,responsePeople,fields)=>{
+        if(err) throw err;
+        let sqlPosts=`select * from wrides where phonetic like '${phonetic}'`;
+        con.query(sqlPosts,(err,responsePosts,fields)=>{
+            if(err) throw err;
+            res.json({result_posts:responsePosts,result_people:responsePeople});
+        });
+    });
+});
 
+router.post('/change-settings',(req,res)=>{
+    let {changes,username}=req.body.data;
+    let sql_string='';
+    for (var k in changes){
+        let value_=changes[k];
+        sql_string=sql_string+k+'='+`'${value_}'`+',';
+    }
+
+    let fixed_sql=sql_string.slice(0,-1);
+    let sql=`update users set ${fixed_sql} where username='${username}'`;
+    con.query(sql,(err,response,fields)=>{
+        if (err) throw err;
+        res.json({msg:'Settings changed succesfully'});
+    })
+});
 
 export default router;

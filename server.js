@@ -1,6 +1,6 @@
 import express from 'express';
 import ssl from 'express-ssl';
-import {serverConf} from './config';
+import {serverConf,dest} from './config';
 import bodyParser from 'body-parser';
 import apiRouter from './api';
 import url from 'url';
@@ -11,7 +11,8 @@ app.use(ssl());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-app.use(express.static(path.join(__dirname,'static')));
+app.use(express.static(dest));
+
 app.get('/',(req,res)=>{
     res.json({msg:'hello'});
 })
