@@ -275,25 +275,23 @@ router.post('/upload-avatar',type,(req,res)=>{
     //console.log('Req body: ',req.body);
     const {filename}=req.file;
     const {username}=req.body;
-    //console.log(filename,'---filename from api');
     let sql=`select path from users where username='${username}'`;
     con.query(sql,(err,response,fields)=>{
         let path=response[0].path;
         let complete_path=dest+'/'+path;
-        //console.log(req.file,'---file from api');
+        console.log('Previous path: ', path);
+        console.log('New path: ', filename);
 
-        //TODO: ERASE PREVIOUS AVATARS
-        //if(path!==null){
-        //    fs.unlink(complete_path,err=>{
-        //        if(err) throw err;
-        //        console.log('Deleted file from ',username);
-        //    });
-        //}
+        if(path!==null && path!==filename){
+            fs.unlink(complete_path,(err)=>{
+                if(err) throw err;
+            });
+        }
         let sql=`update users set path='${filename}' where username='${username}'`;
-        //con.query(sql,(err,response,fields)=>{
-        //    if (err) throw err;
-        //    res.json({msg:'Changed profile picture succesfully'});
-        //});
+        con.query(sql,(err,response,fields)=>{
+            if (err) throw err;
+            res.json({msg:'Changed profile picture succesfully'});
+        });
     });
 });
 
