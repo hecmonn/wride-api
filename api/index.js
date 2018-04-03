@@ -67,7 +67,8 @@ router.post('/login',(req,res)=>{
                     name: prettyName(response[0].fname,response[0].lname),
                     avatar: response[0].path,
                     bio: response[0].bio,
-                    private: response[0].private
+                    private_: response[0].private,
+                    path: response[0].path
                 }, tokenSecret.jwtSecret);
                 res.json({token,isLogged:true});
             } else {
@@ -208,8 +209,8 @@ router.post('/post-action',(req,res)=>{
 });
 
 router.post('/get-followers',(req,res)=>{
-    const username=req.body.data;
-    let sql=`select fname,lname,username from users where username in (select follower_username from followers where username='${username}')`;
+    const {username,username_param}=req.body.data;
+    let sql=`select fname,lname,a.username,a.path,case when b.id is not  null then 1 else 0 end as following,case when a.username='${username}' then 1 else 0 end as own_profile from users a left join followers b on a.username=b.username and b.follower_username='${username}' where a.username in (select follower_username from followers where username='${username_param}');`
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({followers:response});
@@ -279,9 +280,6 @@ router.post('/upload-avatar',type,(req,res)=>{
     con.query(sql,(err,response,fields)=>{
         let path=response[0].path;
         let complete_path=dest+'/'+path;
-        console.log('Previous path: ', path);
-        console.log('New path: ', filename);
-
         if(path!==null && path!==filename){
             fs.unlink(complete_path,(err)=>{
                 if(err) throw err;
@@ -314,19 +312,42 @@ router.post('/change-settings',(req,res)=>{
     let sql_string='';
     for (var k in changes){
         let value_=changes[k];
+        if(k=='private_') {
+            k='private';
+            value_=value_?1:0
+        };
         sql_string=sql_string+k+'='+`'${value_}'`+',';
     }
-
     let fixed_sql=sql_string.slice(0,-1);
     let sql=`update users set ${fixed_sql} where username='${username}'`;
+    console.log('Settings SQL: ',sql);
     con.query(sql,(err,response,fields)=>{
         if (err) throw err;
-        let sqlN=`select * from users where username='${username}'`;
+        let sqlN=`select fname,lname,username,path,bio,private as private_,email from users where username='${username}'`;
         con.query(sqlN,(err,response,fields)=>{
             if(err) throw err;
             res.json({changed_user: response});
         });
     })
+});
+
+router.post('/get-collection-cnt',(req,res)=>{
+    const {username}=req.body.data;
+    let sql=`select count(a.id) as post_cnt from actions a where a.username='${username}' and action=3`;
+    con.query(sql,(err,response,fields)=>{
+        if(err) throw err;
+        res.json({post_cnt:response[0].post_cnt})
+    })
+
+});
+router.post('/get-collection',(req,res)=>{
+    const {username,offset}=req.body.data;
+    let limit=5;
+    let sql=`select a.id,a.created_date,b.id,b.title,b.content,b.username,b.created_date from actions a left join wrides b on a.wid=b.id where a.username='${username}' and action=3 limit ${limit} offset ${offset}`;
+    con.query(sql,(err,response,fields)=>{
+        if(err) throw err;
+        res.json({collection:response});
+    });
 });
 
 export default router;
