@@ -8,6 +8,7 @@ import metaphone from 'metaphone';
 import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
+import isEmpty from 'is-empty';
 
 const router=express.Router();
 const storage=multer.diskStorage({
@@ -80,20 +81,52 @@ router.post('/login',(req,res)=>{
         }
     });
 });
-router.post('/save-post',(req,res)=>{
-    const {username,title,content}=req.body.data;
+
+
+router.post('/save-post',async (req,res)=>{
+    const {username,title,content,draft,draft_redirector,id,tagsSelected}=req.body.data;
+    console.log('tagsSelected: ',tagsSelected);
     let phonetic=metaphone(title);
-    let sql=`INSERT INTO wrides(username,title,content,phonetic) VALUES('${username}','${title}','${content}','${phonetic}')`;
-    con.query(sql,(err,response,fields)=>{
+    //let sql=`INSERT INTO wrides(username,title,content,phonetic,draft) VALUES('${username}','${title}','${content}','${phonetic}',${draft})`;
+    let sql='';
+    if(draft_redirector){
+        sql=`update wrides set title='${title}',content='${content}',phonetic='${phonetic}',draft=${draft},created_date=current_timestamp where id=${id}`;
+    } else{
+        sql=`INSERT INTO wrides(username,title,content,phonetic,draft) VALUES('${username}','${title}','${content}','${phonetic}',${draft})`;
+    }
+    await con.query(sql, async(err,response,fields)=>{
         if(err) throw err;
-        res.json({submitted:true,...req.body.data})
+        let wride_id=draft_redirector?id:response.responseId;
+        //res.json({submitted:true,...req.body.data});
+        await tagsSelected.map(async r=>{
+            console.log(r);
+            let sql=`select id from tags where tag='${r}'`;
+            await con.query(sql, async (err,response,fields)=>{
+                if(err) throw err;
+                console.log('Response from tag query: ',response);
+                if(isEmpty(response)){
+                    let sqlTag=`insert into tags(tag) values('${r}')`;
+                    await con.query(sqlTag,async(err,response,fields)=>{
+                        if(err) throw err;
+                        let tag_id=response.insertId;
+                    });
+                }
+                let sql_wt=`insert into wrides_tags (wid,tid) values(${wride_id},${tag_id})`
+                await con.query(sql_wt,(err,response,fields)=>{
+                    if(err) throw err;
+                });
+            });
+        });
+        if(!err) res.json({saved_post:true});
     });
+
+
 });
 
 router.post('/get-own-posts',(req,res)=>{
     const {username,offset}=req.body.data;
     let limit=5;
-    let sql=`select a.*,b.fname,b.lname,b.path,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared,sum(case when c.action=3 and c.username='${username}' then 1 else 0 end) as is_saved,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username where a.username='${username}' group by id,content,title,a.created_date,a.username,fname,lname,path order by a.created_date desc limit ${limit} offset ${offset};`;
+    let sql=`select a.*,b.fname,b.lname,b.path,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared,sum(case when c.action=3 and c.username='${username}' then 1 else 0 end) as is_saved,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username where a.username='${username}' and draft=0 group by id,content,title,a.created_date,a.username,fname,lname,path order by a.created_date desc limit ${limit} offset ${offset};`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({fetched:true,wrides:response});
@@ -102,7 +135,7 @@ router.post('/get-own-posts',(req,res)=>{
 
 router.post('/get-own-posts-count',(req,res)=>{
     const username=req.body.data;
-    let sql=`select count(a.id) as posts_cnt from wrides a where a.username='${username}';`;
+    let sql=`select count(a.id) as posts_cnt from wrides a where a.username='${username}' and draft=0;`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({wrides_cnt:response[0].posts_cnt});
@@ -113,7 +146,7 @@ router.post('/get-own-posts-count',(req,res)=>{
 router.post('/get-home-posts',(req,res)=>{
     const {username,offset}=req.body.data;
     let limit=5;
-    let sql=`select a.*,b.fname,b.lname,b.path,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared,sum(case when c.action=3 and c.username='${username}' then 1 else 0 end) as is_saved,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username where  a.username in (select username from followers where follower_username='${username}') or a.username='${username}' group by id,content,title,a.created_date,a.username,fname,lname,path order by a.created_date desc limit ${limit} offset ${offset};`;
+    let sql=`select a.*,b.fname,b.lname,b.path,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared,sum(case when c.action=3 and c.username='${username}' then 1 else 0 end) as is_saved,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username where  a.username in (select username from followers where follower_username='${username}') or a.username='${username}' and draft=0 group by id,content,title,a.created_date,a.username,fname,lname,path order by a.created_date desc limit ${limit} offset ${offset};`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({ok:true,wrides:response});
@@ -122,7 +155,7 @@ router.post('/get-home-posts',(req,res)=>{
 
 router.post('/get-home-posts-count',(req,res)=>{
     const username=req.body.data;
-    let sql=`select count(a.id) as posts_cnt from wrides a where a.username in (select username from followers where follower_username='${username}') or a.username='${username}';`;
+    let sql=`select count(a.id) as posts_cnt from wrides a where draft=0 and a.username in (select username from followers where follower_username='${username}') or a.username='${username}';`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({wrides_cnt:response[0].posts_cnt});
@@ -228,7 +261,7 @@ router.post('/get-likes',(req,res)=>{
 
 router.post('/get-stats',(req,res)=>{
     const username=req.body.data;
-    let sql=`select count(distinct a.id) as post_cnt, count(distinct c.follower_username) as followers_cnt, count(distinct b.id) as likes_cnt from wrides a left join actions b on a.username=b.username and b.action=1 left join followers c on a.username=c.username where a.username='${username}';`
+    let sql=`select count(distinct a.id) as post_cnt, count(distinct c.follower_username) as followers_cnt, count(distinct b.id) as likes_cnt from wrides a left join actions b on a.username=b.username and b.action=1 left join followers c on a.username=c.username where a.username='${username}' and draft=0;`
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({stats:response})
@@ -264,7 +297,7 @@ router.post('/get-unread-notifications',(req,res)=>{
 
 router.post('/clear-notifications',(req,res)=>{
     const username=req.body.data;
-    let sql=`update actions set seen=1 where seen=0 and wid in (select id from wrides where username='${username}');`;
+    let sql=`update actions set seen=1 where seen=0 and wid in (select id from wrides where username='${username}' and draft=0);`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({cleared:response});
@@ -299,7 +332,7 @@ router.post('/get-search',(req,res)=>{
     let sql=`select username,fname,lname from users where phonetic like '%${phonetic}%' or username='${query}'`;
     con.query(sql,(err,responsePeople,fields)=>{
         if(err) throw err;
-        let sqlPosts=`select * from wrides where phonetic like '${phonetic}'`;
+        let sqlPosts=`select * from wrides where phonetic like '${phonetic}' and draft=0`;
         con.query(sqlPosts,(err,responsePosts,fields)=>{
             if(err) throw err;
             res.json({result_posts:responsePosts,result_people:responsePeople});
@@ -338,7 +371,6 @@ router.post('/get-collection-cnt',(req,res)=>{
         if(err) throw err;
         res.json({post_cnt:response[0].post_cnt})
     })
-
 });
 router.post('/get-collection',(req,res)=>{
     const {username,offset}=req.body.data;
@@ -347,6 +379,25 @@ router.post('/get-collection',(req,res)=>{
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({collection:response});
+    });
+});
+
+router.post('/get-drafts-cnt',(req,res)=>{
+    const {username}=req.body.data;
+    let sql=`select count(a.id) as post_cnt from wrides a where a.username='${username}' and draft=1`;
+    console.log('draft cnt: ',sql);
+    con.query(sql,(err,response,fields)=>{
+        if(err) throw err;
+        res.json({post_cnt:response[0].post_cnt})
+    })
+});
+
+router.post('/get-drafts',(req,res)=>{
+    const {username}=req.body.data;
+    let sql=`select * from wrides where username='${username}' and draft=1`;
+    con.query(sql,(err,response,fields)=>{
+        if (err) throw err;
+        res.json({drafts:response});
     });
 });
 
