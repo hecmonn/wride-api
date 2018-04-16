@@ -84,43 +84,45 @@ router.post('/login',(req,res)=>{
 
 
 router.post('/save-post',async (req,res)=>{
-    const {username,title,content,draft,draft_redirector,id,tagsSelected}=req.body.data;
-    console.log('tagsSelected: ',tagsSelected);
+    const {username,title,content,draft,draft_redirector,id,tagsSelected,anonymous}=req.body.data;
     let phonetic=metaphone(title);
     //let sql=`INSERT INTO wrides(username,title,content,phonetic,draft) VALUES('${username}','${title}','${content}','${phonetic}',${draft})`;
+    let anonymous_fixed=anonymous?1:0;
     let sql='';
     if(draft_redirector){
-        sql=`update wrides set title='${title}',content='${content}',phonetic='${phonetic}',draft=${draft},created_date=current_timestamp where id=${id}`;
+        sql=`update wrides set title='${title}',content='${content}',phonetic='${phonetic}',draft=${draft},created_date=current_timestamp,anonymous='${anonymous_fixed}' where id=${id}`;
     } else{
-        sql=`INSERT INTO wrides(username,title,content,phonetic,draft) VALUES('${username}','${title}','${content}','${phonetic}',${draft})`;
+        sql=`INSERT INTO wrides(username,title,content,phonetic,draft,anonymous) VALUES('${username}','${title}','${content}','${phonetic}',${draft},'${anonymous_fixed}')`;
     }
     await con.query(sql, async(err,response,fields)=>{
         if(err) throw err;
-        let wride_id=draft_redirector?id:response.responseId;
+        let wride_id=draft_redirector?id:response.insertId;
         //res.json({submitted:true,...req.body.data});
         await tagsSelected.map(async r=>{
-            console.log(r);
             let sql=`select id from tags where tag='${r}'`;
             await con.query(sql, async (err,response,fields)=>{
                 if(err) throw err;
-                console.log('Response from tag query: ',response);
                 if(isEmpty(response)){
                     let sqlTag=`insert into tags(tag) values('${r}')`;
-                    await con.query(sqlTag,async(err,response,fields)=>{
+                    con.query(sqlTag,async(err,response,fields)=>{
                         if(err) throw err;
-                        let tag_id=response.insertId;
+                        tag_id=response.insertId;
+                        let sql_wt=`insert into wrides_tags (wid,tid) values(${wride_id},${tag_id})`
+                        await con.query(sql_wt,(err,response,fields)=>{
+                            if(err) throw err;
+                        });
+                    });
+                } else {
+                    tag_id=response[0].id;
+                    let sql_wt=`insert into wrides_tags (wid,tid) values(${wride_id},${tag_id})`
+                    await con.query(sql_wt,(err,response,fields)=>{
+                        if(err) throw err;
                     });
                 }
-                let sql_wt=`insert into wrides_tags (wid,tid) values(${wride_id},${tag_id})`
-                await con.query(sql_wt,(err,response,fields)=>{
-                    if(err) throw err;
-                });
             });
         });
         if(!err) res.json({saved_post:true});
     });
-
-
 });
 
 router.post('/get-own-posts',(req,res)=>{
@@ -235,6 +237,7 @@ router.post('/post-action',(req,res)=>{
     } else if(wyd==4){
         wydn='unsaved';
     }
+    console.log('Post action sql: ',sql)
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({wydn});
@@ -400,5 +403,7 @@ router.post('/get-drafts',(req,res)=>{
         res.json({drafts:response});
     });
 });
+
+
 
 export default router;
