@@ -11,7 +11,8 @@ app.use(ssl());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-app.use(express.static(dest));
+app.use(express.static(dest.profile));
+app.use(express.static(dest.media));
 
 app.get('/',(req,res)=>{
     res.json({msg:'hello'});

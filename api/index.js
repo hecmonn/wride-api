@@ -13,7 +13,16 @@ import isEmpty from 'is-empty';
 const router=express.Router();
 const storage=multer.diskStorage({
     destination: function (req, file, cb) {
-        cb(null,dest);
+        console.log('Req from image post: ',file);
+        let filextPos = file
+                .originalname
+                .lastIndexOf('-'),
+            filext = file
+                .originalname
+                .substring(filextPos)
+        let source=file.originalname.slice(0,3);
+        let fixed_dest=source=='wid'?dest.media:dest.profile;
+        cb(null,fixed_dest);
     },
     filename: function (req, file, cb) {
         cb(null,file.originalname);
@@ -83,6 +92,18 @@ router.post('/login',(req,res)=>{
 });
 
 
+router.post('/save-image-post',type,(req,res)=>{
+    //console.log('Req: ',req.file);
+    //console.log('Req body: ',req.body);
+    const {wid}=req.body;
+    const {filename,mimetype}=req.file;
+    let sql=`insert into media(type,path,wid) values ('${mimetype}','${filename}',${wid})`;
+    con.query(sql,(err,response,fields)=>{
+        if(err) throw err;
+        res.json({uploaded:true});
+    });
+});
+
 router.post('/save-post',async (req,res)=>{
     const {username,title,content,draft,draft_redirector,id,tagsSelected,anonymous}=req.body.data;
     let phonetic=metaphone(title);
@@ -113,6 +134,7 @@ router.post('/save-post',async (req,res)=>{
                         });
                     });
                 } else {
+                    //repeteaded because you cannot con.query() and get the result out of the function
                     tag_id=response[0].id;
                     let sql_wt=`insert into wrides_tags (wid,tid) values(${wride_id},${tag_id})`
                     await con.query(sql_wt,(err,response,fields)=>{
@@ -121,7 +143,7 @@ router.post('/save-post',async (req,res)=>{
                 }
             });
         });
-        if(!err) res.json({saved_post:true});
+        if(!err) res.json({saved_post:true,wid:response.insertId});
     });
 });
 
