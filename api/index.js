@@ -93,8 +93,6 @@ router.post('/login',(req,res)=>{
 
 
 router.post('/save-image-post',type,(req,res)=>{
-    //console.log('Req: ',req.file);
-    //console.log('Req body: ',req.body);
     const {wid}=req.body;
     const {filename,mimetype}=req.file;
     let sql=`insert into media(type,path,wid) values ('${mimetype}','${filename}',${wid})`;
@@ -107,7 +105,6 @@ router.post('/save-image-post',type,(req,res)=>{
 router.post('/save-post',async (req,res)=>{
     const {username,title,content,draft,draft_redirector,id,tagsSelected,anonymous}=req.body.data;
     let phonetic=metaphone(title);
-    //let sql=`INSERT INTO wrides(username,title,content,phonetic,draft) VALUES('${username}','${title}','${content}','${phonetic}',${draft})`;
     let anonymous_fixed=anonymous?1:0;
     let sql='';
     if(draft_redirector){
@@ -118,7 +115,6 @@ router.post('/save-post',async (req,res)=>{
     await con.query(sql, async(err,response,fields)=>{
         if(err) throw err;
         let wride_id=draft_redirector?id:response.insertId;
-        //res.json({submitted:true,...req.body.data});
         await tagsSelected.map(async r=>{
             let sql=`select id from tags where tag='${r}'`;
             await con.query(sql, async (err,response,fields)=>{
@@ -150,7 +146,7 @@ router.post('/save-post',async (req,res)=>{
 router.post('/get-own-posts',(req,res)=>{
     const {username,offset}=req.body.data;
     let limit=5;
-    let sql=`select a.*,b.fname,b.lname,b.path,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared,sum(case when c.action=3 and c.username='${username}' then 1 else 0 end) as is_saved,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username where a.username='${username}' and draft=0 group by id,content,title,a.created_date,a.username,fname,lname,path order by a.created_date desc limit ${limit} offset ${offset};`;
+    let sql=`select a.*,b.fname,b.lname,b.path,d.path as post_path,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared,sum(case when c.action=3 and c.username='${username}' then 1 else 0 end) as is_saved,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username left join media d on a.id=d.wid where a.username='${username}' and draft=0 group by id,content,title,a.created_date,a.username,fname,lname,path,post_path order by a.created_date desc limit ${limit} offset ${offset};`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({fetched:true,wrides:response});
@@ -170,7 +166,7 @@ router.post('/get-own-posts-count',(req,res)=>{
 router.post('/get-home-posts',(req,res)=>{
     const {username,offset}=req.body.data;
     let limit=5;
-    let sql=`select a.*,b.fname,b.lname,b.path,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared,sum(case when c.action=3 and c.username='${username}' then 1 else 0 end) as is_saved,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username where  a.username in (select username from followers where follower_username='${username}') or a.username='${username}' and draft=0 group by id,content,title,a.created_date,a.username,fname,lname,path order by a.created_date desc limit ${limit} offset ${offset};`;
+    let sql=`select a.*,b.fname,b.lname,b.path,d.path as post_path,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared,sum(case when c.action=3 and c.username='${username}' then 1 else 0 end) as is_saved,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username left join media d on a.id=d.wid where  a.username in (select username from followers where follower_username='${username}') or a.username='${username}' and draft=0 group by id,content,title,a.created_date,a.username,fname,lname,path,post_path order by a.created_date desc limit ${limit} offset ${offset};`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({ok:true,wrides:response});
