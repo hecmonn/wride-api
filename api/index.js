@@ -9,7 +9,7 @@ import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
 import isEmpty from 'is-empty';
-
+import {inspiration,inspirationCnt} from '../queries/inspiration';
 const router=express.Router();
 const storage=multer.diskStorage({
     destination: function (req, file, cb) {
@@ -123,7 +123,7 @@ router.post('/save-post',async (req,res)=>{
                     let sqlTag=`insert into tags(tag) values('${r}')`;
                     con.query(sqlTag,async(err,response,fields)=>{
                         if(err) throw err;
-                        tag_id=response.insertId;
+                        let tag_id=response.insertId;
                         let sql_wt=`insert into wrides_tags (wid,tid) values(${wride_id},${tag_id})`
                         await con.query(sql_wt,(err,response,fields)=>{
                             if(err) throw err;
@@ -131,7 +131,7 @@ router.post('/save-post',async (req,res)=>{
                     });
                 } else {
                     //repeteaded because you cannot con.query() and get the result out of the function
-                    tag_id=response[0].id;
+                    let tag_id=response[0].id;
                     let sql_wt=`insert into wrides_tags (wid,tid) values(${wride_id},${tag_id})`
                     await con.query(sql_wt,(err,response,fields)=>{
                         if(err) throw err;
@@ -406,7 +406,6 @@ router.post('/get-collection',(req,res)=>{
 router.post('/get-drafts-cnt',(req,res)=>{
     const {username}=req.body.data;
     let sql=`select count(a.id) as post_cnt from wrides a where a.username='${username}' and draft=1`;
-    console.log('draft cnt: ',sql);
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({post_cnt:response[0].post_cnt})
@@ -422,6 +421,23 @@ router.post('/get-drafts',(req,res)=>{
     });
 });
 
+router.post('/get-inspiration-cnt',(req,res)=>{
+    const {username}=req.body.data;
+    let sql=inspirationCnt(username);
+    con.query(sql,(err,response,fields)=>{
+        if(err) throw err;
+        res.json({post_cnt:response[0].post_cnt})
+    });
+});
 
+router.post('/get-inspiration',(req,res)=>{
+    const {username}=req.body.data;
+    let sql=inspiration(username);
+    console.log(sql);
+    con.query(sql,(err,response,fields)=>{
+        if(err) throw err;
+        res.json({wrides:response})
+    });
+});
 
 export default router;
