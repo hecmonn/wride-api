@@ -1,3 +1,30 @@
+export function getHomePosts(username,limit,offset){
+    const sql=`
+        select a.*
+            ,b.fname
+            ,b.lname
+            ,b.path
+            ,d.path as post_path
+            ,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked
+            ,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared
+            ,sum(case when c.action=3 and c.username='${username}' then 1 else 0 end) as is_saved
+            ,sum(case when c.action=1 then 1 else 0 end) as likes_cnt
+            ,sum(case when c.action=2 then 1 else 0 end) as shares_cnt
+        from wrides a
+            left join actions c on a.id=c.wid
+            left join users b on a.username=b.username
+            left join media d on a.id=d.wid
+        where
+            draft=0
+            and a.username not in (select blocked from blocked where blocker='${username}')
+            and a.username in (select username from followers where follower_username='${username}') or a.username='${username}'
+        group by id,content,title,a.created_date,a.username,fname,lname,path,post_path
+        order by a.created_date desc
+        limit ${limit} offset ${offset};
+    `;
+    return sql;
+}
+
 export function inspiration (username) {
     const sql=`
     select
@@ -38,9 +65,12 @@ export function inspiration (username) {
         )
 
         and a.username not in (select username from followers where follower_username <>'${username}')
+        and a.username not in (select blocked from blocked where blocker='${username}')
     group by a.id,title
     order by saves_cnt desc, likes_cnt desc, shares_cnt desc;
-    `
+    `;
+    //add to where statement on query
+    //and a.username <> '${username}'
     return sql;
 }
 
@@ -73,6 +103,7 @@ export function inspirationCnt (username) {
         )
         and a.username <> '${username}'
         and a.username not in (select username from followers where follower_username <>'${username}')
+        and a.username not in (select blocked from blocked where blocker='${username}')
     `;
     return sql;
 }

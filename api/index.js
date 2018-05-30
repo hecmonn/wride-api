@@ -9,7 +9,7 @@ import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
 import isEmpty from 'is-empty';
-import {inspiration,inspirationCnt} from '../queries/inspiration';
+import {inspiration,inspirationCnt,getHomePosts} from '../queries';
 const router=express.Router();
 const storage=multer.diskStorage({
     destination: function (req, file, cb) {
@@ -144,9 +144,9 @@ router.post('/save-post',async (req,res)=>{
 });
 
 router.post('/get-own-posts',(req,res)=>{
-    const {username,offset}=req.body.data;
-    let limit=5;
-    let sql=`select a.*,b.fname,b.lname,b.path,d.path as post_path,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared,sum(case when c.action=3 and c.username='${username}' then 1 else 0 end) as is_saved,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username left join media d on a.id=d.wid where a.username='${username}' and draft=0 group by id,content,title,a.created_date,a.username,fname,lname,path,post_path order by a.created_date desc limit ${limit} offset ${offset};`;
+    const {username,offset,auser}=req.body.data;
+    let limit=30;
+    let sql=`select a.*,b.fname,b.lname,b.path,d.path as post_path,sum(case when c.action=1 and c.username='${auser}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${auser}' then 1 else 0 end) as is_shared,sum(case when c.action=3 and c.username='${auser}' then 1 else 0 end) as is_saved,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username left join media d on a.id=d.wid where a.username='${username}' and draft=0 and anonymous=0 group by id,content,title,a.created_date,a.username,fname,lname,path,post_path order by a.created_date desc limit ${limit} offset ${offset};`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({fetched:true,wrides:response});
@@ -155,7 +155,7 @@ router.post('/get-own-posts',(req,res)=>{
 
 router.post('/get-own-posts-count',(req,res)=>{
     const username=req.body.data;
-    let sql=`select count(a.id) as posts_cnt from wrides a where a.username='${username}' and draft=0;`;
+    let sql=`select count(a.id) as posts_cnt from wrides a where a.username='${username}' and draft=0 and anonymous=0;`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({wrides_cnt:response[0].posts_cnt});
@@ -165,8 +165,8 @@ router.post('/get-own-posts-count',(req,res)=>{
 
 router.post('/get-home-posts',(req,res)=>{
     const {username,offset}=req.body.data;
-    let limit=5;
-    let sql=`select a.*,b.fname,b.lname,b.path,d.path as post_path,sum(case when c.action=1 and c.username='${username}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${username}' then 1 else 0 end) as is_shared,sum(case when c.action=3 and c.username='${username}' then 1 else 0 end) as is_saved,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username left join media d on a.id=d.wid where  a.username in (select username from followers where follower_username='${username}') or a.username='${username}' and draft=0 group by id,content,title,a.created_date,a.username,fname,lname,path,post_path order by a.created_date desc limit ${limit} offset ${offset};`;
+    let limit=30;
+    let sql=getHomePosts(username,limit,offset);
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({ok:true,wrides:response});
@@ -175,7 +175,8 @@ router.post('/get-home-posts',(req,res)=>{
 
 router.post('/get-home-posts-count',(req,res)=>{
     const username=req.body.data;
-    let sql=`select count(a.id) as posts_cnt from wrides a where draft=0 and a.username in (select username from followers where follower_username='${username}') or a.username='${username}';`;
+    let sql=`select count(a.id) as posts_cnt from wrides a where draft=0 and a.username not in (select blocked from blocked where blocker='${username}') and a.username in (select username from followers where follower_username='${username}') or a.username='${username}';`;
+
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({wrides_cnt:response[0].posts_cnt});
@@ -255,7 +256,6 @@ router.post('/post-action',(req,res)=>{
     } else if(wyd==4){
         wydn='unsaved';
     }
-    console.log('Post action sql: ',sql)
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({wydn});
@@ -291,7 +291,7 @@ router.post('/get-stats',(req,res)=>{
 
 router.post('/get-notifications',(req,res)=>{
     const {username,offset}=req.body.data;
-    let sql=`select * from (select a.username, case when action=1 then 'has liked' when action=2 then 'has shared' else 'undefined' end as action, title,a.created_date,action as action_no,path from actions a left join wrides b on a.wid=b.id left join users c on a.username=c.username where b.username='${username}' and a.username<>'${username}' union select follower_username as username,'started following you' as action, null as title,a.created_date,3 as action_no,path from followers a left join users b on a.follower_username=b.username where a.username='${username}' and follower_username<>'${username}') a order by a.created_date desc`;
+    let sql=`select * from (select a.username, case when action=1 then 'has liked' when action=2 then 'has shared' else 'undefined' end as action, title,a.created_date,action as action_no,path from actions a left join wrides b on a.wid=b.id left join users c on a.username=c.username where b.username='${username}' and a.username<>'${username}' and action <>3 union select follower_username as username,'started following you' as action, null as title,a.created_date,3 as action_no,path from followers a left join users b on a.follower_username=b.username where a.username='${username}' and follower_username<>'${username}') a order by a.created_date desc`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({notifications:response});
@@ -300,7 +300,7 @@ router.post('/get-notifications',(req,res)=>{
 
 router.post('/get-notifications-count',(req,res)=>{
     const username=req.body.data;
-    let sql=`select sum(cnt) as nots_cnt from (select count(a.id) as cnt from actions a left join wrides b on a.wid=b.id where b.username='${username}' and a.username<>'${username}' union select count(a.id) as cnt from followers a where a.username='${username}' and follower_username<>'${username}') a`;
+    let sql=`select sum(cnt) as nots_cnt from (select count(a.id) as cnt from actions a left join wrides b on a.wid=b.id where b.username='${username}' and a.username<>'${username}' and action<>3 union select count(a.id) as cnt from followers a where a.username='${username}' and follower_username<>'${username}') a`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({notifications:response[0].nots_cnt});
@@ -433,11 +433,50 @@ router.post('/get-inspiration-cnt',(req,res)=>{
 router.post('/get-inspiration',(req,res)=>{
     const {username}=req.body.data;
     let sql=inspiration(username);
-    console.log(sql);
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
         res.json({wrides:response})
     });
 });
+
+router.post('/block-user',(req,res)=>{
+    const {username,auser,id}=req.body.data;
+    let sql=`insert into blocked(blocker,blocked,wid) values('${auser}','${username}',${id})`;
+    query(sql,res);
+});
+
+router.post('/delete-post',(req,res)=>{
+    const {id}=req.body.data;
+    let sql=`delete from wrides where id=${id}`;
+    query(sql,res);
+});
+
+router.post('/report-post',(req,res)=>{
+    const {id,auser}=req.body.data;
+    let sqlCheck=`select id from reported where wid=${id} and username='${auser}'`;
+    con.query(sqlCheck,(err,response,fields)=>{
+        let sql;
+        if(isEmpty(response)){
+            sql=`insert into reported (wid,username) values(${id},'${auser}')`;
+        } else {
+            let rid=response[0].id;
+            sql=`update reported set times=times+1 where id=${rid}`;
+        }
+        query(sql,res);
+    });
+});
+
+router.post('/get-blocked',(req,res)=>{
+    const {username}=req.body.data;
+    let sql=`select a.blocked as username, b.fname,b.lname, b.path from blocked a inner join users b on a.blocked=b.username where a.blocker='${username}'`;
+    query(sql,res);
+});
+
+router.post('/unblock',(req,res)=>{
+    const {username,auser}=req.body.data;
+    let sql=`delete from blocked where blocked='${username}' and blocker='${auser}'`;
+    query(sql,res);
+});
+
 
 export default router;
