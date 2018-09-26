@@ -1,482 +1,129 @@
 import mysql from 'mysql';
 import express from 'express';
 import {dbCred,tokenSecret,dest} from '../config';
-import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
-import {prettyName,initials,_make_user_sound} from './helpers.js';
-import metaphone from 'metaphone';
-import multer from 'multer';
-import fs from 'fs';
-import path from 'path';
+//helpers
 import isEmpty from 'is-empty';
-import {inspiration,inspirationCnt,getHomePosts} from '../queries';
+//import haversine from 'haversine';
+import {getDistance} from 'geolib'
+import sortObjectsArray from 'sort-objects-array';
+
 const router=express.Router();
-const storage=multer.diskStorage({
-    destination: function (req, file, cb) {
-        console.log('Req from image post: ',file);
-        let filextPos = file
-                .originalname
-                .lastIndexOf('-'),
-            filext = file
-                .originalname
-                .substring(filextPos)
-        let source=file.originalname.slice(0,3);
-        let fixed_dest=source=='wid'?dest.media:dest.profile;
-        cb(null,fixed_dest);
-    },
-    filename: function (req, file, cb) {
-        cb(null,file.originalname);
-    }
-});
-const upload = multer({storage});
-const type = upload.single('photo');
-/*const storage = multer.diskStorage({
-    //destination: function (req, file, cb) {
-    //    cb(null, '/tmp/my-uploads')
-    //},
-    filename: function (req, file, cb) {
-        cb(file.fieldname + '.jpeg')
-    }
-});*/
+
 const con = mysql.createConnection({...dbCred});
 
 const query=(sql,res)=>{
     con.query(sql,(err,response,fields)=>{
         err?
         console.error('Something went wrong fetching the query\n%s',err):'';
-        res.json({response})
+        res.json(response)
     })
 }
 
-router.post('/save-user',(req,res)=>{
-    const {fname,lname,email,username,password,confirm_password}=req.body.data;
-    //TODO: MISSING BACKEND VALIDATIONS
-    //TODO: redirect user logged in to home
-    let phonetic=_make_user_sound({name:`${fname} ${lname}`,username});
-    const password_digest=bcrypt.hashSync(password, 10);
-    let sql=`INSERT INTO users(username,fname,lname,email,password,phonetic) values('${username}','${fname}','${lname}','${email}','${password_digest}','${phonetic}')`
-    let query_res=con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        const payload=req.body.data;
-        console.log(payload);
-        res.json({payload});
-    });
-
-});
-router.post('/login',(req,res)=>{
-    const {identifier,password}=req.body.data;
-    let sql=`select * from users where username='${identifier}' or email='${identifier}'`;
-    let queryRes=con.query(sql,(err,response,fields)=>{
-        if(err) throw(err);
-        if(response.length>0){
-            if(bcrypt.compareSync(password,response[0].password)){
-                const token=jwt.sign({
-                    username: response[0].username,
-                    email: response[0].email,
-                    initials: initials(response[0].fname,response[0].lname),
-                    name: prettyName(response[0].fname,response[0].lname),
-                    avatar: response[0].path,
-                    bio: response[0].bio,
-                    private_: response[0].private,
-                    path: response[0].path
-                }, tokenSecret.jwtSecret);
-                res.json({token,isLogged:true});
-            } else {
-                console.log('invalid bruh')
-                res.status(401).json({errors:{form:'Invalid credentials'},isLogged:false});
-            }
+router.post('/register',(req,res)=>{
+    const {source,payload}=req.body;
+    const sql=`select id,source from users where email='${payload.email}' and source=${source}`;
+    con.query(sql,(err,response,fields)=>{
+        if(isEmpty(response)){
+            let sql=`insert into users(source,email,name) values(1,'${payload.email}','${payload.name}')`;
+            con.query(sql,(err,response,fields)=>{
+                let payload;
+                if(err) payload={msg:'Error registering user',success:false,errorDesc:err}
+                else payload={msg:'User registered succesfully',success:true};
+                res.json(payload);
+            });
         } else {
-            res.status(401).json({errors:{form:'Invalid credentials'},isLogged:false});
+            res.json({msg:'Welcome back',success:true})
         }
     });
 });
 
-
-router.post('/save-image-post',type,(req,res)=>{
-    const {wid}=req.body;
-    const {filename,mimetype}=req.file;
-    let sql=`insert into media(type,path,wid) values ('${mimetype}','${filename}',${wid})`;
+router.post('/get-restaurants',(req,res)=>{
+    let userCoords=req.body;
+    const sql=`select a.* from locations a`; //limit ${limit} offset ${offset}`;
     con.query(sql,(err,response,fields)=>{
         if(err) throw err;
-        res.json({uploaded:true});
+        if(!isEmpty(response)){
+            let restsTemp=[];
+            response.map(l=>{
+                let resCoords={
+                    latitude: parseFloat(l.latitude),
+                    longitude: parseFloat(l.longitude)
+                }
+                let distance=getDistance(userCoords,resCoords);
+                restsTemp.push({...l,distance});
+            });
+            let sortedRestaurants=sortObjectsArray(restsTemp,'distance','asc');
+            let sortedFilteredRestaurants=sortedRestaurants.filter(r=>r.distance<30000000000);
+            //console.log('SFR: ',sortedRestaurants);
+            res.json(sortedFilteredRestaurants);
+        } else {
+            res.json(response);
+        }
     });
 });
 
-router.post('/save-post',async (req,res)=>{
-    const {username,title,content,draft,draft_redirector,id,tagsSelected,anonymous}=req.body.data;
-    let phonetic=metaphone(title);
-    let anonymous_fixed=anonymous?1:0;
-    let sql='';
-    if(draft_redirector){
-        sql=`update wrides set title='${title}',content='${content}',phonetic='${phonetic}',draft=${draft},created_date=current_timestamp,anonymous='${anonymous_fixed}' where id=${id}`;
-    } else{
-        sql=`INSERT INTO wrides(username,title,content,phonetic,draft,anonymous) VALUES('${username}','${title}','${content}','${phonetic}',${draft},'${anonymous_fixed}')`;
-    }
-    await con.query(sql, async(err,response,fields)=>{
-        if(err) throw err;
-        let wride_id=draft_redirector?id:response.insertId;
-        await tagsSelected.map(async r=>{
-            let sql=`select id from tags where tag='${r}'`;
-            await con.query(sql, async (err,response,fields)=>{
-                if(err) throw err;
-                if(isEmpty(response)){
-                    let sqlTag=`insert into tags(tag) values('${r}')`;
-                    con.query(sqlTag,async(err,response,fields)=>{
-                        if(err) throw err;
-                        let tag_id=response.insertId;
-                        let sql_wt=`insert into wrides_tags (wid,tid) values(${wride_id},${tag_id})`
-                        await con.query(sql_wt,(err,response,fields)=>{
-                            if(err) throw err;
+router.post('/save-ticket',(req,res)=>{
+    console.log('save ticket body: ',req.body);
+    const {
+        table
+        ,revenueCenter
+        ,name
+        ,open
+        ,openedAt
+        ,locationId
+        ,locationProviderId
+        ,providerId
+        ,ticketId
+        ,user
+    }=req.body;
+    let tableProviderId=table.id;
+    let rcProviderId=revenueCenter.id;
+    let sqlRc=`select id from revenue_centers where location_id=${locationId} and rc_provider_id='${rcProviderId}'`;
+    con.query(sqlRc,(err,response,fields)=>{
+        if(!isEmpty(response)){
+            if(err) console.error('Error getting rc: ',err);
+            let rc_id=response[0].id;
+            let sqlTable=`select id from tables where location_id=${locationId} and table_provider_id='${tableProviderId}'`;
+            con.query(sqlTable,(err,response,fields)=>{
+                if(!isEmpty(response)){
+                    if(err) console.error('Error getting table: ',err);
+                    let table_id=response[0].id;
+                    let openFix=open?1:0;
+                    let sqlSt=`insert into tickets(table_id,revenue_center_id,name,open,opened_at,location_id,provider_id,ticket_provider_id,)
+                        values(${table_id},${rc_id},'${name}','${openFix}','${opened_at}',${locationId},${providerId},'${ticketId}')`;
+                    con.query(sqlSt,(err,response,fields)=>{
+                        if(err) console.error('Error saving ticket: ',err);
+                        let ticketPhoodId=response.lastInsertId;
+                        let sqlSu=`insert into users_tickets (user_id,ticket_id,is_admin) values(${user.id},${ticketPhoodId})`;
+                        con.query(sqlSu,(err,response,fields)=>{
+                            if(err) console.error('Error saving user: ',err);
+                            res.json({ok:true,msg:'Ticket opened succesfully'});
                         });
                     });
                 } else {
-                    //repeteaded because you cannot con.query() and get the result out of the function
-                    let tag_id=response[0].id;
-                    let sql_wt=`insert into wrides_tags (wid,tid) values(${wride_id},${tag_id})`
-                    await con.query(sql_wt,(err,response,fields)=>{
-                        if(err) throw err;
-                    });
+                    res.json({ok:false,msg:'Table not available'});
                 }
             });
-        });
-        if(!err) res.json({saved_post:true,wid:response.insertId});
-    });
-});
-
-router.post('/get-own-posts',(req,res)=>{
-    const {username,offset,auser}=req.body.data;
-    let limit=30;
-    let sql=`select a.*,b.fname,b.lname,b.path,d.path as post_path,sum(case when c.action=1 and c.username='${auser}' then 1 else 0 end) as is_liked,sum(case when c.action=2 and c.username='${auser}' then 1 else 0 end) as is_shared,sum(case when c.action=3 and c.username='${auser}' then 1 else 0 end) as is_saved,sum(case when c.action=1 then 1 else 0 end) as likes_cnt,sum(case when c.action=2 then 1 else 0 end) as shares_cnt from wrides a left join actions c on a.id=c.wid left join users b on a.username=b.username left join media d on a.id=d.wid where a.username='${username}' and draft=0 and anonymous=0 group by id,content,title,a.created_date,a.username,fname,lname,path,post_path order by a.created_date desc limit ${limit} offset ${offset};`;
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({fetched:true,wrides:response});
-    });
-});
-
-router.post('/get-own-posts-count',(req,res)=>{
-    const username=req.body.data;
-    let sql=`select count(a.id) as posts_cnt from wrides a where a.username='${username}' and draft=0 and anonymous=0;`;
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({wrides_cnt:response[0].posts_cnt});
-    });
-});
-
-
-router.post('/get-home-posts',(req,res)=>{
-    const {username,offset}=req.body.data;
-    let limit=30;
-    let sql=getHomePosts(username,limit,offset);
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({ok:true,wrides:response});
-    });
-});
-
-router.post('/get-home-posts-count',(req,res)=>{
-    const username=req.body.data;
-    let sql=`select count(a.id) as posts_cnt from wrides a where draft=0 and a.username not in (select blocked from blocked where blocker='${username}') and a.username in (select username from followers where follower_username='${username}') or a.username='${username}';`;
-
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({wrides_cnt:response[0].posts_cnt});
-    });
-});
-
-
-
-router.post('/get-profile',(req,res)=>{
-    const username=req.body.data;
-    let sql=`select a.username,path,fname,lname,bio,count(distinct b.id) as post_cnt, count(distinct d.follower_username) as followers_cnt, count(distinct c.id) as likes_cnt from users a left join wrides b on a.username=b.username left join actions c on a.username=c.username and c.action=1 left join followers d on a.username=d.username where a.username='${username}'`;
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        if(response.length>0){
-            res.json({user:{
-                username:response[0].username,
-                name:prettyName(response[0].fname,response[0].lname),
-                email:response[0].email,
-                bio:response[0].bio,
-                likes: response[0].likes_cnt,
-                followers: response[0].followers_cnt,
-                posts: response[0].post_cnt,
-                path: response[0].path
-            }});
         } else {
-            res.json({user:'error'})
+            res.json({ok:false,msg:'Revenue center not available'});
         }
     });
+    res.json({ok:true})
 });
 
-router.post('/following',(req,res)=>{
-    const {username,username_param}=req.body.data;
-    let sql=`select count(id) as following from followers where follower_username='${username}' and username='${username_param}';`
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({following: response[0].following})
-    });
-});
-
-router.post('/un-follow',(req,res)=>{
-    const {username,username_param,following}=req.body.data;
-    let sql=`insert into followers (follower_username,username) values('${username}','${username_param}')`;
-    if(following){
-        sql=`delete from followers where follower_username='${username}' and username='${username_param}'`;
-    }
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({action:following?'Follow':'Following',following:!following});
-    });
-});
-
-router.post('/post-action',(req,res)=>{
-    const {id,auser,action,liked,shared,saved}=req.body.data;
-    let sql=`insert into actions(wid,username,action) values('${id}','${auser}','${action}')`;
-    let wyd=1;
-    let wydn;
-    if(action==1 && liked){
-        sql=`delete from actions where action=1 and username='${auser}' and wid=${id}`;
-        wyd=2;
-    } else if(action==2 && shared){
-        sql=`delete from actions where action=2 and username='${auser}' and wid=${id}`;
-        wyd=3;
-    } else if(action==3 && saved){
-        sql=`delete from actions where action=3 and username='${auser}' and wid=${id}`;
-        wyd=4;
-    }
-    if(wyd==1 && action==1){
-        wydn='liked';
-    } else if(wyd==1 && action==3){
-        wydn='saved';
-    } else if(wyd==1 && action==2){
-        wydn='shared';
-    } else if(wyd==2){
-        wydn='unliked';
-    } else if(wyd==3){
-        wydn='unshared';
-    } else if(wyd==4){
-        wydn='unsaved';
-    }
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({wydn});
-    });
-});
-
-router.post('/get-followers',(req,res)=>{
-    const {username,username_param}=req.body.data;
-    let sql=`select fname,lname,a.username,a.path,case when b.id is not  null then 1 else 0 end as following,case when a.username='${username}' then 1 else 0 end as own_profile from users a left join followers b on a.username=b.username and b.follower_username='${username}' where a.username in (select follower_username from followers where username='${username_param}');`
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({followers:response});
-    });
-});
-
-router.post('/get-likes',(req,res)=>{
-    const username=req.body.data;
-    let sql=`select id,title,content,username from wrides where id in(select wid from actions where username='${username}' and action=1) order by created_date desc`;
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({likes:response});
-    });
-});
-
-router.post('/get-stats',(req,res)=>{
-    const username=req.body.data;
-    let sql=`select count(distinct a.id) as post_cnt, count(distinct c.follower_username) as followers_cnt, count(distinct b.id) as likes_cnt from wrides a left join actions b on a.username=b.username and b.action=1 left join followers c on a.username=c.username where a.username='${username}' and draft=0;`
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({stats:response})
-    });
-});
-
-router.post('/get-notifications',(req,res)=>{
-    const {username,offset}=req.body.data;
-    let sql=`select * from (select a.username, case when action=1 then 'has liked' when action=2 then 'has shared' else 'undefined' end as action, title,a.created_date,action as action_no,path from actions a left join wrides b on a.wid=b.id left join users c on a.username=c.username where b.username='${username}' and a.username<>'${username}' and action <>3 union select follower_username as username,'started following you' as action, null as title,a.created_date,3 as action_no,path from followers a left join users b on a.follower_username=b.username where a.username='${username}' and follower_username<>'${username}') a order by a.created_date desc`;
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({notifications:response});
-    });
-});
-
-router.post('/get-notifications-count',(req,res)=>{
-    const username=req.body.data;
-    let sql=`select sum(cnt) as nots_cnt from (select count(a.id) as cnt from actions a left join wrides b on a.wid=b.id where b.username='${username}' and a.username<>'${username}' and action<>3 union select count(a.id) as cnt from followers a where a.username='${username}' and follower_username<>'${username}') a`;
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({notifications:response[0].nots_cnt});
-    });
-});
-
-router.post('/get-unread-notifications',(req,res)=>{
-    const username=req.body.data;
-    let sql=`select a.username, case when action=1 then 'liked' when action=2 then 'shared' else 'undefined' end as action, title from actions a left join wrides b on a.wid=b.id where b.username='${username}' and seen=0`;
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({notifications:response});
-    });
-});
-
-router.post('/clear-notifications',(req,res)=>{
-    const username=req.body.data;
-    let sql=`update actions set seen=1 where seen=0 and wid in (select id from wrides where username='${username}' and draft=0);`;
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({cleared:response});
-    });
-});
-
-router.post('/upload-avatar',type,(req,res)=>{
-    //console.log('Req: ',req.file);
-    //console.log('Req body: ',req.body);
-    const {filename}=req.file;
-    const {username}=req.body;
-    let sql=`select path from users where username='${username}'`;
-    con.query(sql,(err,response,fields)=>{
-        let path=response[0].path;
-        let complete_path=dest+'/'+path;
-        if(path!==null && path!==filename){
-            fs.unlink(complete_path,(err)=>{
-                if(err) throw err;
-            });
-        }
-        let sql=`update users set path='${filename}' where username='${username}'`;
-        con.query(sql,(err,response,fields)=>{
-            if (err) throw err;
-            res.json({msg:'Changed profile picture succesfully'});
-        });
-    });
-});
-
-router.post('/get-search',(req,res)=>{
-    let {query,username}=req.body.data;
-    let phonetic=metaphone(query);
-    let sql=`select username,fname,lname from users where phonetic like '%${phonetic}%' or username='${query}'`;
-    con.query(sql,(err,responsePeople,fields)=>{
-        if(err) throw err;
-        let sqlPosts=`select * from wrides where phonetic like '${phonetic}' and draft=0`;
-        con.query(sqlPosts,(err,responsePosts,fields)=>{
-            if(err) throw err;
-            res.json({result_posts:responsePosts,result_people:responsePeople});
-        });
-    });
-});
-
-router.post('/change-settings',(req,res)=>{
-    let {changes,username}=req.body.data;
-    let sql_string='';
-    for (var k in changes){
-        let value_=changes[k];
-        if(k=='private_') {
-            k='private';
-            value_=value_?1:0
-        };
-        sql_string=sql_string+k+'='+`'${value_}'`+',';
-    }
-    let fixed_sql=sql_string.slice(0,-1);
-    let sql=`update users set ${fixed_sql} where username='${username}'`;
-    console.log('Settings SQL: ',sql);
-    con.query(sql,(err,response,fields)=>{
-        if (err) throw err;
-        let sqlN=`select fname,lname,username,path,bio,private as private_,email from users where username='${username}'`;
-        con.query(sqlN,(err,response,fields)=>{
-            if(err) throw err;
-            res.json({changed_user: response});
-        });
-    })
-});
-
-router.post('/get-collection-cnt',(req,res)=>{
-    const {username}=req.body.data;
-    let sql=`select count(a.id) as post_cnt from actions a where a.username='${username}' and action=3`;
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({post_cnt:response[0].post_cnt})
-    })
-});
-router.post('/get-collection',(req,res)=>{
-    const {username,offset}=req.body.data;
-    let limit=5;
-    let sql=`select a.id,a.created_date,b.id,b.title,b.content,b.username,b.created_date from actions a left join wrides b on a.wid=b.id where a.username='${username}' and action=3 limit ${limit} offset ${offset}`;
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({collection:response});
-    });
-});
-
-router.post('/get-drafts-cnt',(req,res)=>{
-    const {username}=req.body.data;
-    let sql=`select count(a.id) as post_cnt from wrides a where a.username='${username}' and draft=1`;
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({post_cnt:response[0].post_cnt})
-    })
-});
-
-router.post('/get-drafts',(req,res)=>{
-    const {username}=req.body.data;
-    let sql=`select * from wrides where username='${username}' and draft=1`;
-    con.query(sql,(err,response,fields)=>{
-        if (err) throw err;
-        res.json({drafts:response});
-    });
-});
-
-router.post('/get-inspiration-cnt',(req,res)=>{
-    const {username}=req.body.data;
-    let sql=inspirationCnt(username);
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({post_cnt:response[0].post_cnt})
-    });
-});
-
-router.post('/get-inspiration',(req,res)=>{
-    const {username}=req.body.data;
-    let sql=inspiration(username);
-    con.query(sql,(err,response,fields)=>{
-        if(err) throw err;
-        res.json({wrides:response})
-    });
-});
-
-router.post('/block-user',(req,res)=>{
-    const {username,auser,id}=req.body.data;
-    let sql=`insert into blocked(blocker,blocked,wid) values('${auser}','${username}',${id})`;
+router.post('/get-menu',(req,res)=>{
+    const sql=`select * from dummy_items`;
     query(sql,res);
 });
 
-router.post('/delete-post',(req,res)=>{
-    const {id}=req.body.data;
-    let sql=`delete from wrides where id=${id}`;
-    query(sql,res);
-});
-
-router.post('/report-post',(req,res)=>{
-    const {id,auser}=req.body.data;
-    let sqlCheck=`select id from reported where wid=${id} and username='${auser}'`;
-    con.query(sqlCheck,(err,response,fields)=>{
-        let sql;
+router.get('/dummy',(req,res)=>{
+    const sql=`select * from users`;
+    con.query(sql,(err,response,fields)=>{
+        console.log('Fields: ',fields);
         if(isEmpty(response)){
-            sql=`insert into reported (wid,username) values(${id},'${auser}')`;
-        } else {
-            let rid=response[0].id;
-            sql=`update reported set times=times+1 where id=${rid}`;
+            let sql=`insert into users()`
         }
-        query(sql,res);
     });
 });
-
-router.post('/get-blocked',(req,res)=>{
-    const {username}=req.body.data;
-    let sql=`select a.blocked as username, b.fname,b.lname, b.path from blocked a inner join users b on a.blocked=b.username where a.blocker='${username}'`;
-    query(sql,res);
-});
-
-router.post('/unblock',(req,res)=>{
-    const {username,auser}=req.body.data;
-    let sql=`delete from blocked where blocked='${username}' and blocker='${auser}'`;
-    query(sql,res);
-});
-
 
 export default router;

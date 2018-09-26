@@ -1,0 +1,35 @@
+select count(*) from wrides a inner join actions b on a.id=b.wid where b.username='hecmonn' and a.username<>'hecmonn' and seen=0;
+
+select
+    *
+from
+    (select
+        a.username
+        ,case when action=1 then 'has liked'
+            when action=2 then 'has shared'
+            else 'undefined' 
+            end as action
+        ,title
+        ,a.created_date
+        ,action as action_no
+        ,path
+    from actions a
+        left join wrides b on a.wid=b.id
+        left join users c on a.username=c.username
+    where b.username='${username}'
+        and a.username<>'${username}'
+        and action <>3
+    union
+        select
+            follower_username as username
+            ,'started following you' as action
+            , null as title
+            ,a.created_date
+            ,3 as action_no
+            ,path
+        from followers a
+            left join users b on a.follower_username=b.username
+        where a.username='${username}'
+            and follower_username<>'${username}'
+    ) a
+    order by a.created_date desc
