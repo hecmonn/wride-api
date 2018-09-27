@@ -63,7 +63,6 @@ router.post('/get-restaurants',(req,res)=>{
 });
 
 router.post('/save-ticket',(req,res)=>{
-    console.log('save ticket body: ',req.body);
     const {
         table
         ,revenueCenter
@@ -79,22 +78,24 @@ router.post('/save-ticket',(req,res)=>{
     let tableProviderId=table.id;
     let rcProviderId=revenueCenter.id;
     let sqlRc=`select id from revenue_centers where location_id=${locationId} and rc_provider_id='${rcProviderId}'`;
+    console.log('sqlRc: ',sqlRc);
     con.query(sqlRc,(err,response,fields)=>{
         if(!isEmpty(response)){
             if(err) console.error('Error getting rc: ',err);
-            let rc_id=response[0].id;
+            let rcId=response[0].id;
             let sqlTable=`select id from tables where location_id=${locationId} and table_provider_id='${tableProviderId}'`;
             con.query(sqlTable,(err,response,fields)=>{
                 if(!isEmpty(response)){
                     if(err) console.error('Error getting table: ',err);
-                    let table_id=response[0].id;
+                    let tableId=response[0].id;
                     let openFix=open?1:0;
-                    let sqlSt=`insert into tickets(table_id,revenue_center_id,name,open,opened_at,location_id,provider_id,ticket_provider_id,)
-                        values(${table_id},${rc_id},'${name}','${openFix}','${opened_at}',${locationId},${providerId},'${ticketId}')`;
+                    let sqlSt=`insert into tickets(table_id,revenue_center_id,name,open,opened_at,location_id,provider_id,ticket_provider_id) values(${tableId},${rcId},'${name}','${openFix}',from_unixtime('${openedAt}'),${locationId},${providerId},'${ticketId}')`;
+                    console.log('sqlSt: ',sqlSt);
                     con.query(sqlSt,(err,response,fields)=>{
                         if(err) console.error('Error saving ticket: ',err);
-                        let ticketPhoodId=response.lastInsertId;
-                        let sqlSu=`insert into users_tickets (user_id,ticket_id,is_admin) values(${user.id},${ticketPhoodId})`;
+                        console.log('tikcet insert id: ',response.insertId);
+                        let ticketPhoodId=response.insertId;
+                        let sqlSu=`insert into users_tickets (user_id,ticket_id,is_admin) values(1,${ticketPhoodId},1)`;
                         con.query(sqlSu,(err,response,fields)=>{
                             if(err) console.error('Error saving user: ',err);
                             res.json({ok:true,msg:'Ticket opened succesfully'});
@@ -105,10 +106,10 @@ router.post('/save-ticket',(req,res)=>{
                 }
             });
         } else {
+            console.log('revenue center doesnt exist');
             res.json({ok:false,msg:'Revenue center not available'});
         }
     });
-    res.json({ok:true})
 });
 
 router.post('/get-menu',(req,res)=>{
