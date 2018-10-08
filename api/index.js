@@ -86,7 +86,6 @@ router.post('/save-ticket',(req,res)=>{
             if(err) console.error('Error getting rc: ',err);
             let rcId=response[0].id;
             let sqlTable=`select id from tables where location_id=${locationId} and table_provider_id='${tableProviderId}'`;
-            console.log('sql table: ',sqlTable);
             con.query(sqlTable,(err,response,fields)=>{
                 if(!isEmpty(response)){
                     if(err) console.error('Error getting table: ',err);
@@ -98,10 +97,8 @@ router.post('/save-ticket',(req,res)=>{
                         let ticketPhoodId=response.insertId;
                         //to update
                         let sqlSu=`insert into users_tickets (user_id,ticket_id,is_admin) values(${user.id},${ticketPhoodId},${user.admin})`;
-                        console.log('sql Su: ',sqlSu);
                         con.query(sqlSu,(err,response,fields)=>{
                             if(err) console.error('Error saving user: ',err);
-                            console.log('ticket phood id: ',ticketPhoodId);
                             res.json({ok:true,ticketPhoodId,msg:'Ticket opened succesfully'});
                         });
                     });
@@ -117,12 +114,23 @@ router.post('/save-ticket',(req,res)=>{
 });
 
 router.post('/get-ticket-admin',(req,res)=>{
-    const {ticketId}=req.body;
-    let sql=`select user_id from users_tickets where is_admin=1 and ticket_id=${ticketId}`;
+    const {ticketPhoodId}=req.body;
+    console.log('ticket admin body: ',req.body);
+    let sql=`select user_id from users_tickets where is_admin=1 and ticket_id=${ticketPhoodId}`;
     con.query(sql,(err,response,fields)=>{
         if(err) console.error('Error selecting ticket admin: ',err);
-        console.log('ticket admin sql: ',sql);
+        console.log('ticket admin res: ',response);
         res.json({response});
+    });
+});
+
+router.post('/get-people-ticket',(req,res)=>{
+    const {ticketPhoodId}=req.body;
+    let sql=`select id, name, source_id, source from users_tickets a inner join users b on a.user_id=b.id where ticket_id=${ticketPhoodId}`;
+    console.log('get people sql: ',sql);
+    con.query(sql,(err,response,fields)=>{
+        if(err) console.error('Error getting people on ticket: ',err);
+        console.log('get pt res: ',response);
     });
 });
 
@@ -134,7 +142,6 @@ router.post('/get-menu',(req,res)=>{
 router.get('/dummy',(req,res)=>{
     const sql=`select * from users`;
     con.query(sql,(err,response,fields)=>{
-        console.log('Fields: ',fields);
         if(isEmpty(response)){
             let sql=`insert into users()`
         }
