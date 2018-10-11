@@ -127,10 +127,8 @@ router.post('/get-ticket-admin',(req,res)=>{
 router.post('/get-people-ticket',(req,res)=>{
     const {ticketPhoodId}=req.body;
     let sql=`select id, name, source_id, source from users_tickets a inner join users b on a.user_id=b.id where ticket_id=${ticketPhoodId}`;
-    console.log('get people sql: ',sql);
     con.query(sql,(err,response,fields)=>{
         if(err) console.error('Error getting people on ticket: ',err);
-        console.log('get pt res: ',response);
     });
 });
 
@@ -146,6 +144,74 @@ router.get('/dummy',(req,res)=>{
             let sql=`insert into users()`
         }
     });
+});
+
+router.post('/save-phone',(req,res)=>{
+    const {value,userId}=req.body;
+    const sql=`update users set phone_number='${value}' where id=${userId}`;
+    con.query(sql,(err,response,fields)=>{
+        if(err) console.error('Error updating phone: ',err);
+        console.log('Phone saved');
+        res.json({response});
+    });
+});
+
+router.post('/send-invite',(req,res)=>{
+    const {userId,phoneNumber,ticketPhoodId}=req.body;
+    const sql=`select id,name from users where phone_number='${phoneNumber}'`;
+    con.query(sql,(err,response,fields)=>{
+        if (err) console.error('Error getting user by ph number: ',err);
+        if(!isEmpty(response)){
+            let guestId=response[0].id;
+            let guestName=response[0].name;
+            const sqlOpen=`select ticket_id from users_tickets a inner join tickets b on a.ticket_id=b.id where open=1 and user_id=${guestId}`;
+            console.log('sqlOpen: ',sqlOpen);
+            con.query(sqlOpen,(err,response,fields)=>{
+                if (err) console.error('Error getting opened tickets on invitation: ',err);
+                if(isEmpty(response)){
+                    const sqlGuest=`insert into invitations (uid_host,uid_guest,ticket_id) values(${userId},${guestId},${ticketPhoodId})`;
+                    con.query(sqlGuest,(err,response,fields)=>{
+                        if (err) console.error('Error inserting invitation: ',err);
+                        res.json({ok:true,msg:`Invitation send to ${guestName}`,guestId});
+                    });
+                }
+                else {
+                    res.json({ok:false, msg:'User already has an active ticket'});
+                }
+            });
+
+        } else {
+            res.json({ok:false,msg:'User not found'});
+        }
+    });
+});
+
+router.post('/get-invitation',(req,res)=>{
+    const {userId}=req.body;
+    const sql=`
+        select
+            ticket_id
+            ,c.name as user_name
+            ,d.name as location_name
+        from invitations a
+            inner join tickets b on a.ticket_id=b.id
+            inner join users c on a.uid_host=c.id
+            inner join locations d on b.location_id=d.id
+        where open=1
+        and uid_guest=${userId}
+    `;
+    con.query(sql,(err,response,fields)=>{
+        if (err) console.error('Error getting invitation: ',err);
+        if(!isEmpty(response)){
+            let ticketPhoodId=response[0].ticket_id;
+            let locationName=response[0].location_name;
+            let userName=response[0].user_name;
+            res.json({gotInvite:true,ticketPhoodId,locationName,userName});
+        } else {
+            res.json({gotInvite:false})
+        }
+
+    })
 });
 
 export default router;
