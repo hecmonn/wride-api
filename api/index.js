@@ -214,4 +214,8 @@ router.post('/get-invitation',(req,res)=>{
     })
 });
 
+router.post('/join-ticket',(req,res)=>{
+    console.log('joining ticket...');
+    res.json({ok:true});
+});
 export default router;
