@@ -1,11 +1,14 @@
 import mysql from 'mysql';
 import express from 'express';
-import {dbCred,tokenSecret,dest} from '../config';
+import {dbCred,tokenSecret,dest,conektaKeys} from '../config';
 //helpers
 import isEmpty from 'is-empty';
 //import haversine from 'haversine';
 import {getDistance} from 'geolib'
 import sortObjectsArray from 'sort-objects-array';
+import conekta from 'conekta';
+
+
 
 const router=express.Router();
 
@@ -24,18 +27,19 @@ router.post('/register',(req,res)=>{
     let sourceId=payload.id;
     const sql=`select id,source from users where email='${payload.email}' and source=${source}`;
     con.query(sql,(err,response,fields)=>{
-        if(err) console.error('Error registering user: ',err);
+        if(err) console.error('Error identifying user: ',err);
         if(isEmpty(response)){
-            let sql=`insert into users(source,email,name) values(1,'${payload.email}','${payload.name}')`;
+            let sql=`insert into users(source,email,name,source_id) values(1,'${payload.email}','${payload.name}','${payload.id}')`;
             con.query(sql,(err,response,fields)=>{
+                if(err) console.error('Problem registering user: ',err);
                 let payload;
                 let userId=response.insertId;
-                if(err) payload={msg:'Error registering user',success:false,errorDesc:err}
+                if(err) payload={msg:'Error registering user',success:false,errorDesc:err};
                 else payload={msg:'User registered succesfully',success:true,userId,source,sourceId};
                 res.json(payload);
             });
         } else {
-            res.json({msg:'Welcome back',success:true,userId:response[0].id,sourceId,source})
+            res.json({msg:'Welcome back',success:true,userId:response[0].id,sourceId,source});
         }
     });
 });
@@ -115,11 +119,9 @@ router.post('/save-ticket',(req,res)=>{
 
 router.post('/get-ticket-admin',(req,res)=>{
     const {ticketPhoodId}=req.body;
-    console.log('ticket admin body: ',req.body);
     let sql=`select user_id from users_tickets where is_admin=1 and ticket_id=${ticketPhoodId}`;
     con.query(sql,(err,response,fields)=>{
         if(err) console.error('Error selecting ticket admin: ',err);
-        console.log('ticket admin res: ',response);
         res.json({response});
     });
 });
@@ -129,6 +131,7 @@ router.post('/get-people-ticket',(req,res)=>{
     let sql=`select id, name, source_id, source from users_tickets a inner join users b on a.user_id=b.id where ticket_id=${ticketPhoodId}`;
     con.query(sql,(err,response,fields)=>{
         if(err) console.error('Error getting people on ticket: ',err);
+        res.json({people:response})
     });
 });
 
@@ -165,7 +168,6 @@ router.post('/send-invite',(req,res)=>{
             let guestId=response[0].id;
             let guestName=response[0].name;
             const sqlOpen=`select ticket_id from users_tickets a inner join tickets b on a.ticket_id=b.id where open=1 and user_id=${guestId}`;
-            console.log('sqlOpen: ',sqlOpen);
             con.query(sqlOpen,(err,response,fields)=>{
                 if (err) console.error('Error getting opened tickets on invitation: ',err);
                 if(isEmpty(response)){
@@ -215,7 +217,88 @@ router.post('/get-invitation',(req,res)=>{
 });
 
 router.post('/join-ticket',(req,res)=>{
-    console.log('joining ticket...');
-    res.json({ok:true});
+    const {userId,ticketPhoodId}=req.body;
+    const sql=`insert into users_tickets(ticket_id,user_id) values(${ticketPhoodId},${userId})`;
+    console.l
+    con.query(sql,(err,response,fields)=>{
+        if(err) console.error('Error inserting guest into ticket: ',err);
+        const sqlInv=`update invitations set attended=1 where ticket_id=${ticketPhoodId} and uid_guest=${userId}`;
+        con.query(sqlInv,(err,response,fields)=>{
+            if(err) console.error('Error updating invite: ',err);
+            //res.json({ok:true, msg:'Succesfully joined ticket',ticketPhoodId,userId});
+            const sqlInvTicket=`select location_provider_id,ticket_provider_id,a.provider_id from tickets a inner join locations b on a.location_id=b.id where a.id=${ticketPhoodId}`;
+            con.query(sqlInvTicket,(err,response,fields)=>{
+                if(err) console.error('Error getting ticket: ',err);
+                const {location_provider_id,ticket_provider_id,provider_id}=response[0];
+                res.json({ok:true,locationProviderId:location_provider_id,ticketId:ticket_provider_id,providerId:provider_id,ticketPhoodId});
+            });
+        })
+    })
 });
+
+router.post('/create-pay',(req,res)=>{
+    console.log('createPay body: ',req.body);
+    const {name,finalToPay}=req.body;
+    conekta.api_key = conektaKeys.privateKey;
+    conekta.locale = 'es';
+
+    conekta.Order.create({
+        "currency": "MXN",
+        "customer_info": {
+            "name": "Hector Monarrez",
+            "phone": "+5215555555555",
+            "email": "hecmonn@gmail.com"
+        },
+        "line_items": [{
+            "name": "Box of Cohiba S1s",
+            "description": "Imported From Mex.",
+            "unit_price": 10,
+            "quantity": 1,
+            "tags": ["food", "mexican food"],
+            "type": "physical"
+        }],
+        "charges": [{
+            "payment_method": {
+                "type": "card",
+                "amount": finalToPay,
+                "data": [{
+                    "id": "src_2fw8YeLSqoaGEYTn3",
+                    "name": "Jorge Lopez",
+                    "exp_month": 12,
+                    "exp_year": 19,
+                    "object": "payment_source",
+                    "type": "card",
+                    "created_at": 284629,
+                    "last4": "4242",
+                    "brand": "visa",
+                    "parent_id": "cus_zzmjKsnM9oacyCwV3"
+                }]
+            }
+        }]
+    }, function(err, order) {
+        if(err) console.error('Error creating order: ',err,' type: ',err.type);
+        console.log('success: ',order.toObject());
+        order.capture((err,capture)=>{
+            if(err) {
+                console.error('Error capturing order: ',err,' type: ',err.type);
+                return 0;
+            }
+            console.log('Order paid: ',capture.toObject());
+        });
+        //const order=conekta.Order.find()
+    });
+});
+
+router.post('/save-item',(req,res)=>{
+    const {comments,itemCnt,finalPrice,id,ticketPhoodId,name,userId}=req.body;
+    const sql=`insert into ordered_items (name,comment,price,ticket_id,user_id) values('${name}','${comments}',${finalPrice},${ticketPhoodId},${userId})`;
+    con.query(sql,(err,response,fields)=>{
+        if (err) console.error('Error saving item: ',err);
+        res.json({ok:true});
+    });
+});
+
+
+
+
 export default router;

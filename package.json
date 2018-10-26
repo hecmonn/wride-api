@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "bcrypt": "^1.0.3",
+    "conekta": "^3.5.1",
     "express": "^4.16.2",
     "express-ssl": "^3.1.0",
     "geolib": "^2.0.24",
